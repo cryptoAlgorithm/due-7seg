@@ -3,6 +3,8 @@ bool hbDir = true; // true for add, false for subtract
 uint8_t hbSkipCyc = 0; // Skip certain update cycles
 
 void hbInit() {
+  pinMode(LED_BUILTIN, OUTPUT); // "Heartbeat" LED
+  
   // Setup hardware timer
   Timer7.attachInterrupt(hbHandler).start(50000);
 }

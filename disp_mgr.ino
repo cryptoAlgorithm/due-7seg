@@ -2,11 +2,11 @@
 #define DISP_DIGITS 4
 
 // Pins
-const uint8_t disp_seg_pins[] = { 22, 25, 26, 29, 30, 33, 34, 37 };
-const uint8_t disp_dig_pins[] = { 50, 51, 52, 53 };
+const uint8_t disp_seg_pins[] PROGMEM = { 22, 25, 26, 29, 30, 33, 34, 37 };
+const uint8_t disp_dig_pins[] PROGMEM = { 50, 51, 52, 53 };
 
 /* ###### Display maps ###### */
-const unsigned char seven_seg_digits_decode_abcdefg[75]= {
+const unsigned char seven_seg_digits_decode_abcdefg[75] PROGMEM = {
 /*  0     1     2     3     4     5     6     7     8     9     :     ;     */
     0x7E, 0x30, 0x6D, 0x79, 0x33, 0x5B, 0x5F, 0x70, 0x7F, 0x7B, 0x00, 0x00, 
 /*  <     =     >     ?     @     A     B     C     D     E     F     G     */
@@ -26,28 +26,36 @@ const unsigned char seven_seg_digits_decode_abcdefg[75]= {
 
 // Display vars
 uint32_t digit = 0;
-uint16_t cVal  = 0; // Current val to be displayed on screen
 uint16_t uCyc  = 0;
-uint16_t sBuf[] = {0x00, 0x00, 0x00, 0x00};
+uint16_t uVal  = 0; // New val for screen waiting to be updated
+uint8_t  scnOp = 0; // 0 - Update values; 1 - Show scrolling text; 2 - Show status
+String   tBuf  = String();
+unsigned char sBuf[] = {0x00, 0x00, 0x00, 0x00};
 bool actLEDSt  = true;
 
-unsigned char decode_7seg(char chr) {
-  if (chr > (unsigned char)'z') return 0x00;
+unsigned char decode_7seg(unsigned char chr) {
+  if (chr > (unsigned char)'z' || chr < (unsigned char)'0') return 0x00;
   return seven_seg_digits_decode_abcdefg[chr - '0'];
 }
 
-void initDisp() {
+void updateDataBuff(uint16_t value) {
+  uVal = value;
+}
+
+void initDisp(uint16_t ref_rate) {
   pinMode(72, OUTPUT); // Activity LED
   
-  for (int i = 0; i < 8; i++) {
-    pinMode(disp_seg_pins[i], OUTPUT);
-  }
-  for (int i = 0; i < DISP_DIGITS; i++) {
-    pinMode(disp_dig_pins[i], OUTPUT);
-  }
+  for (int i = 0; i < 8; i++) pinMode(disp_seg_pins[i], OUTPUT);
+  for (int i = 0; i < DISP_DIGITS; i++) pinMode(disp_dig_pins[i], OUTPUT);
 
   // Start h/w timer
-  Timer6.attachInterrupt(screenUpdate).start(5000); // Around 50 refreshes / sec
+  Timer6.attachInterrupt(screenUpdate).start(ref_rate); // Around 50 refreshes / sec
+
+  // Show init sequence
+  tBuf = "Hello there";
+  scnOp = 1;
+  delay(7800);
+  scnOp = 0;
 }
 
 char getDigit(uint16_t value, byte digit) {
@@ -61,34 +69,43 @@ void writeDigit(char pins, bool dp) {
   digitalWrite(disp_seg_pins[7], dp);
 }
 
-void updateScnBuff(uint16_t value) {
-  for (int i = 0; i < DISP_DIGITS; i++) {
-    
+void updateScnBuffWithData(uint16_t value) {
+  for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(getDigit(value, DISP_DIGITS - 1 - i) + '0');
+}
+
+uint16_t txtScrollLoc = 0;
+uint8_t  txtScrollInt = 0;
+void updateScnBuffWithText(String txt) {
+  String buff = txt.substring(txtScrollLoc, txtScrollLoc + 4);
+  for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(buff[i]);
+  
+  txtScrollInt++;
+  if (txtScrollInt == 5) {
+    txtScrollInt = 0;
+    txtScrollLoc++;
+    if (txtScrollLoc + 3 >= txt.length()) txtScrollLoc = 0;
   }
 }
 
 void screenUpdate() {
-  for (int i = 0; i < DISP_DIGITS; i++) {
-    digitalWrite(disp_dig_pins[i], digit != i);
-  }
+  for (int i = 0; i < DISP_DIGITS; i++) digitalWrite(disp_dig_pins[i], digit != i);
 
-  const bool dp = (digit == 0);
-
-  SerialUSB.print(digit);
-
-  writeDigit(decode_7seg(getDigit(cVal, DISP_DIGITS - 1 - digit) + '0'), dp);
+  writeDigit(sBuf[digit], digit == 0 && scnOp == 0);
   
   digit++;
   uCyc ++;
 
-  if (uCyc == DISP_DIGITS * 5) {
+  if (uCyc == REF_RATE / 5) {
     // Update digits
-    cVal = uVal;
-    uCyc = 0;
+    switch (scnOp) {
+      case 0: updateScnBuffWithData(uVal); actLEDSt = !actLEDSt; break;
+      case 1: updateScnBuffWithText(tBuf); break;
+    }
     
     // Toggle heartbeat LED
     digitalWrite(72, actLEDSt);
-    actLEDSt = !actLEDSt;
+
+    uCyc = 0;
   }
 
   if (digit >= DISP_DIGITS) digit = 0;
