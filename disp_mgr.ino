@@ -1,6 +1,3 @@
-// Display config
-#define DISP_DIGITS 4
-
 // Pins
 const uint8_t disp_seg_pins[] PROGMEM = { 22, 25, 26, 29, 30, 33, 34, 37 };
 const uint8_t disp_dig_pins[] PROGMEM = { 50, 51, 52, 53 };
@@ -32,14 +29,24 @@ uint8_t  scnOp = 0; // 0 - Update values; 1 - Show scrolling text; 2 - Show stat
 String   tBuf  = String();
 unsigned char sBuf[] = {0x00, 0x00, 0x00, 0x00};
 bool actLEDSt  = true;
+volatile bool dispSleep = false;
+volatile long ignoreBtn = 0;
+
+// Value setter functions
+
+void updateDataBuff(uint16_t value) {
+  uVal = value;
+}
+
+void toggleDispSleep() {
+  if (millis() - 250 < ignoreBtn) return;
+  dispSleep = !dispSleep;
+  ignoreBtn = millis();
+}
 
 unsigned char decode_7seg(unsigned char chr) {
   if (chr > (unsigned char)'z' || chr < (unsigned char)'0') return 0x00;
   return seven_seg_digits_decode_abcdefg[chr - '0'];
-}
-
-void updateDataBuff(uint16_t value) {
-  uVal = value;
 }
 
 void initDisp(uint16_t ref_rate) {
@@ -54,8 +61,10 @@ void initDisp(uint16_t ref_rate) {
   // Show init sequence
   tBuf = "Hello there";
   scnOp = 1;
-  delay(7800);
+  delay(3350);
   scnOp = 0;
+
+  ignoreBtn = millis();
 }
 
 char getDigit(uint16_t value, byte digit) {
@@ -63,10 +72,12 @@ char getDigit(uint16_t value, byte digit) {
 }
 
 void writeDigit(char pins, bool dp) {
-  for (int i = 0; i < 7; i++) {
-    digitalWrite(disp_seg_pins[i], (pins >> (6 - i)) & 1);
-  }
   digitalWrite(disp_seg_pins[7], dp);
+  if (dispSleep) {
+    for (int i = 0; i < 7; i++) digitalWrite(disp_seg_pins[i], 0);
+    return;
+  }
+  for (int i = 0; i < 7; i++) digitalWrite(disp_seg_pins[i], (pins >> (6 - i)) & 1);
 }
 
 void updateScnBuffWithData(uint16_t value) {
@@ -80,7 +91,7 @@ void updateScnBuffWithText(String txt) {
   for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(buff[i]);
   
   txtScrollInt++;
-  if (txtScrollInt == 5) {
+  if (txtScrollInt == 2) {
     txtScrollInt = 0;
     txtScrollLoc++;
     if (txtScrollLoc + 3 >= txt.length()) txtScrollLoc = 0;
@@ -90,7 +101,7 @@ void updateScnBuffWithText(String txt) {
 void screenUpdate() {
   for (int i = 0; i < DISP_DIGITS; i++) digitalWrite(disp_dig_pins[i], digit != i);
 
-  writeDigit(sBuf[digit], digit == 0 && scnOp == 0);
+  writeDigit(sBuf[digit], (digit == 0 && scnOp == 0 && !dispSleep) || (digit == DISP_DIGITS - 1 && !actLEDSt));
   
   digit++;
   uCyc ++;
