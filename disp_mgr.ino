@@ -58,7 +58,7 @@ void updateDataBuff(uint16_t value) {
   uVal = value;
 }
 
-void setMode(int8_t nMode, bool persist = true) {
+void setMode(int8_t nMode, bool persist = true) {  
   if (scnOp >= MAX_MODE || scnOp < -1) scnOp = 0;
   else scnOp = nMode;
   
@@ -76,9 +76,12 @@ void setMode(int8_t nMode, bool persist = true) {
   }
 }
 
+// ISH
 void changeMode() {
   if (millis() - DEBOUNCE_T < ignoreBtn) return;
-  // Do whatever you want to do here
+  // Do whatever you want to do here  
+  if (scnOp == -1) return; // If the display is displaying text, ignore the change
+  
   if (scnOp + 1 >= MAX_MODE) setMode(0);
   else setMode(scnOp + 1);
   
