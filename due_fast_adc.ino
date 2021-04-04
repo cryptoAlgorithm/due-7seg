@@ -4,13 +4,16 @@
 #define REF_RATE 500
 #define REF_INT  1000000 / REF_RATE
 #define DISP_DIGITS 4
-#define MAX_MODE 2
+#define MAX_MODE 3
+#define DEBOUNCE_T 250
 
 // ADC/DMA settings
 #define BUF_PRI_LEN 8192
 
 // IO pins
 #define OK_BTN_PIN 48
+#define BUZZ_PWR   44
+#define BUZZ_GND   40
 
 // Stepper config
 #define STEP_PER_REV 64
@@ -42,15 +45,21 @@ void setup() {
   // ------
   // Init I/O
   pinMode(OK_BTN_PIN, INPUT_PULLUP);
+  pinMode(BUZZ_PWR, OUTPUT);
+  pinMode(BUZZ_GND, OUTPUT);
+  digitalWrite(BUZZ_GND, 0);
+
+  // Idk why, but if you don't include this delay, it skips the intro screen
+  delay(400);
   
   hbInit();
   initDisp(REF_INT);
 
   attachInterrupt(digitalPinToInterrupt(OK_BTN_PIN), changeMode, RISING); // Set button interrupt
-  
-  // Init and wait for SerialUSB to connect
-  SerialUSB.begin(0);
 
+  // Init SerialUSB
+  SerialUSB.begin(0);
+  
   // ------
 
   // DMA -> ADC
@@ -75,7 +84,7 @@ void setup() {
 void loop() {
   while (obufn == bufn); // wait for buffer to be full
   // Send it - 512 bytes = 256 uint16_t
-  SerialUSB.write((uint8_t *)buf[obufn], BUF_PRI_LEN * 2);
+  // SerialUSB.write((uint8_t *)buf[obufn], BUF_PRI_LEN * 2);
   // Totally ignore this
   obufn = (obufn + 1) & 3;
   updateDataBuff(buf[3][BUF_PRI_LEN - 1] / 1.24121212); // PReCiSiON

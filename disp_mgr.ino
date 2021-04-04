@@ -1,6 +1,23 @@
+/* ###### Variables ###### */
 // Pins
 const uint8_t disp_seg_pins[] PROGMEM = { 22, 25, 26, 29, 30, 33, 34, 37 };
 const uint8_t disp_dig_pins[] PROGMEM = { 50, 51, 52, 53 };
+
+// Display vars
+uint32_t digit = 0;
+uint16_t uCyc  = 0;
+uint16_t uVal  = 0; // New val for screen waiting to be updated
+volatile int8_t scnOp = -1; // -1 - Show scrolling text; 0 - Update values;
+int8_t nScnOp  = -1;
+String   tBuf  = String();
+uint8_t sBuf[] = {0x00, 0x00, 0x00, 0x00};
+uint8_t errState = 0; // 0 = no error
+bool actLEDSt  = true;
+volatile long ignoreBtn = 0;
+
+// Objects
+RTC_DS1307 rtc; // RTC object
+/* ############ */
 
 /* ###### Display maps ###### */
 const uint8_t seven_seg_digits_decode_abcdefg[75] PROGMEM = {
@@ -21,16 +38,19 @@ const uint8_t seven_seg_digits_decode_abcdefg[75] PROGMEM = {
 };
 /* ############ */
 
-// Display vars
-uint32_t digit = 0;
-uint16_t uCyc  = 0;
-uint16_t uVal  = 0; // New val for screen waiting to be updated
-volatile int8_t scnOp  = 0; // -1 - Show scrolling text; 0 - Update values;
-String   tBuf  = String();
-uint8_t sBuf[] = {0x00, 0x00, 0x00, 0x00};
-uint8_t errState = 0; // 0 = no error
-bool actLEDSt  = true;
-volatile long ignoreBtn = 0;
+/* ###### Helper functions ###### */
+uint8_t decode_7seg(unsigned char chr) {
+  if (chr > (unsigned char)'z' || chr < (unsigned char)'0') return 0x00;
+  return seven_seg_digits_decode_abcdefg[chr - '0'] << 1;
+}
+void addDp(uint8_t digit) {
+  sBuf[digit] = sBuf[digit] | 0b00000001; // Add decimal point dot
+}
+void updateFromDecimal(uint16_t val) {
+  for (int i = 0; i < DISP_DIGITS; i++) 
+    sBuf[i] = decode_7seg(getDigit(val, DISP_DIGITS - 1 - i) + '0');
+}
+/* ############ */
 
 // Value setter functions
 
@@ -38,23 +58,35 @@ void updateDataBuff(uint16_t value) {
   uVal = value;
 }
 
+void setMode(int8_t nMode, bool persist = true) {
+  if (scnOp >= MAX_MODE || scnOp < -1) scnOp = 0;
+  else scnOp = nMode;
+  
+  if (persist && scnOp >= 0) {
+    rtc.writenvram(0, scnOp); // Persistant storage for mode
+    switch(scnOp) {
+      case 0: tBuf = "Adc   "; break;
+      case 1: tBuf = "rtc   "; break;
+      case 2: tBuf = "date   "; break;
+      default: tBuf ="sleep   "; break;
+    }
+    nScnOp = scnOp;
+    SerialUSB.println(scnOp);
+    setMode(-1, false);
+  }
+}
+
 void changeMode() {
-  if (millis() - 250 < ignoreBtn) return;
+  if (millis() - DEBOUNCE_T < ignoreBtn) return;
   // Do whatever you want to do here
-  scnOp++;
-  if (scnOp > MAX_MODE) scnOp = 0;
+  if (scnOp + 1 >= MAX_MODE) setMode(0);
+  else setMode(scnOp + 1);
   
   ignoreBtn = millis();
 }
 
-uint8_t decode_7seg(unsigned char chr) {
-  if (chr > (unsigned char)'z' || chr < (unsigned char)'0') return 0x00;
-  return seven_seg_digits_decode_abcdefg[chr - '0'] << 1;
-}
-
-RTC_DS1307 rtc; // RTC object
-
 void initDisp(uint16_t ref_rate) {
+  // Init i/o
   pinMode(72, OUTPUT); // Activity LED
   
   for (int i = 0; i < 8; i++) pinMode(disp_seg_pins[i], OUTPUT);
@@ -73,10 +105,12 @@ void initDisp(uint16_t ref_rate) {
   }
   
   // Show init sequence
-  tBuf = "Hello there";
-  scnOp = -1;
-  delay(3350);
-  scnOp = 0;
+  tBuf = "Hello   ";
+  setMode(-1, false);
+  
+  // Get and set previous mode
+  if (errState != 10 && errState != 12) nScnOp = rtc.readnvram(0);
+  else nScnOp = 0;
 
   ignoreBtn = millis();
 }
@@ -89,23 +123,48 @@ void writeDigit(uint8_t pins) {
   for (int i = 0; i < 8; i++) digitalWrite(disp_seg_pins[i], (pins >> (7 - i)) & 1);
 }
 
+/* ###### Screen buffer update functions ###### */
 void updateScnBuffWithData(uint16_t value) {
-  for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(getDigit(value, DISP_DIGITS - 1 - i) + '0');
-  sBuf[0] = sBuf[0] | 0b00000001; // Add decimal point dot
+  updateFromDecimal(value);
+  addDp(0);
 }
 
 uint16_t txtScrollLoc = 0;
 uint8_t  txtScrollInt = 0;
+bool     initShowMode = true;
 void updateScnBuffWithText(String txt) {
   String buff = txt.substring(txtScrollLoc, txtScrollLoc + 4);
+  if (txtScrollLoc + 3 >= txt.length()) {
+    txtScrollLoc = 0;
+    setMode(nScnOp, initShowMode);
+    initShowMode = false;
+  }
+  
   for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(buff[i]);
   
   txtScrollInt++;
-  if (txtScrollInt == 2) {
+  if (txtScrollInt == 4) {
     txtScrollInt = 0;
     txtScrollLoc++;
-    if (txtScrollLoc + 3 >= txt.length()) txtScrollLoc = 0;
   }
+}
+
+void updateScnBuffWithTime() {
+  // Update the disp time
+  DateTime now = rtc.now();
+
+  // Then do the same thing as updateScnBuffWithDate to populate display buff
+  updateFromDecimal((now.hour() * 100) + now.minute());
+
+  // Set the decimal place if the second is even
+  if (now.second() % 2 == 0) addDp(1);
+}
+
+void updateScnBuffWithDate() {
+  DateTime now = rtc.now();
+  updateFromDecimal((now.day() * 100) + now.month());
+
+  addDp(1);
 }
 
 void dispSleep() {
@@ -114,28 +173,14 @@ void dispSleep() {
   sBuf[2] = 0x00;
   sBuf[3] = 0x00;
 }
-
-void updateScnBuffWithTime() {
-  // Update the disp time
-  uint16_t timeBuff = 0;
-  DateTime now = rtc.now();
-  timeBuff += now.hour() * 100;
-  timeBuff += now.minute();
-
-  // Then do the same thing as updateScnBuffWithDate to populate display buff
-  for (int i = 0; i < DISP_DIGITS; i++) 
-    sBuf[i] = decode_7seg(getDigit(timeBuff, DISP_DIGITS - 1 - i) + '0');
-
-  // Set the decimal place if the second is even
-  if (now.second() % 2 == 0) sBuf[1] = sBuf[1] | 0b00000001;
-}
+/* ############ */
 
 void screenUpdate() {
   for (int i = 0; i < DISP_DIGITS; i++) digitalWrite(disp_dig_pins[i], digit != i);
 
   writeDigit(sBuf[digit]);
 
-  if (digit == DISP_DIGITS - 1 && !actLEDSt) sBuf[digit] = sBuf[digit] | 0b00000001;
+  if (digit == DISP_DIGITS - 1 && !actLEDSt) addDp(digit);
   else if (digit == DISP_DIGITS - 1 && actLEDSt) sBuf[digit] = sBuf[digit] & 0b11111110;
    
   digit++;
@@ -143,11 +188,13 @@ void screenUpdate() {
 
   if (uCyc == REF_RATE / 5) {
     // Update digits
+    
     switch (scnOp) {
       case -1: updateScnBuffWithText(tBuf); break;
       case 0: updateScnBuffWithData(uVal); break;
       case 1: updateScnBuffWithTime(); break;
-      case 2: dispSleep(); break;
+      case 2: updateScnBuffWithDate(); break;
+      default: dispSleep();
     }
 
     actLEDSt = !actLEDSt;
