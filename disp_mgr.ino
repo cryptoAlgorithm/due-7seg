@@ -3,7 +3,7 @@ const uint8_t disp_seg_pins[] PROGMEM = { 22, 25, 26, 29, 30, 33, 34, 37 };
 const uint8_t disp_dig_pins[] PROGMEM = { 50, 51, 52, 53 };
 
 /* ###### Display maps ###### */
-const unsigned char seven_seg_digits_decode_abcdefg[75] PROGMEM = {
+const uint8_t seven_seg_digits_decode_abcdefg[75] PROGMEM = {
 /*  0     1     2     3     4     5     6     7     8     9     :     ;     */
     0x7E, 0x30, 0x6D, 0x79, 0x33, 0x5B, 0x5F, 0x70, 0x7F, 0x7B, 0x00, 0x00, 
 /*  <     =     >     ?     @     A     B     C     D     E     F     G     */
@@ -25,11 +25,11 @@ const unsigned char seven_seg_digits_decode_abcdefg[75] PROGMEM = {
 uint32_t digit = 0;
 uint16_t uCyc  = 0;
 uint16_t uVal  = 0; // New val for screen waiting to be updated
-uint8_t  scnOp = 0; // 0 - Update values; 1 - Show scrolling text; 2 - Show status
+volatile int8_t scnOp  = 0; // -1 - Show scrolling text; 0 - Update values;
 String   tBuf  = String();
-unsigned char sBuf[] = {0x00, 0x00, 0x00, 0x00};
+uint8_t sBuf[] = {0x00, 0x00, 0x00, 0x00};
+uint8_t errState = 0; // 0 = no error
 bool actLEDSt  = true;
-volatile bool dispSleep = false;
 volatile long ignoreBtn = 0;
 
 // Value setter functions
@@ -38,16 +38,21 @@ void updateDataBuff(uint16_t value) {
   uVal = value;
 }
 
-void toggleDispSleep() {
+void changeMode() {
   if (millis() - 250 < ignoreBtn) return;
-  dispSleep = !dispSleep;
+  // Do whatever you want to do here
+  scnOp++;
+  if (scnOp > MAX_MODE) scnOp = 0;
+  
   ignoreBtn = millis();
 }
 
-unsigned char decode_7seg(unsigned char chr) {
+uint8_t decode_7seg(unsigned char chr) {
   if (chr > (unsigned char)'z' || chr < (unsigned char)'0') return 0x00;
-  return seven_seg_digits_decode_abcdefg[chr - '0'];
+  return seven_seg_digits_decode_abcdefg[chr - '0'] << 1;
 }
+
+RTC_DS1307 rtc; // RTC object
 
 void initDisp(uint16_t ref_rate) {
   pinMode(72, OUTPUT); // Activity LED
@@ -58,9 +63,18 @@ void initDisp(uint16_t ref_rate) {
   // Start h/w timer
   Timer6.attachInterrupt(screenUpdate).start(ref_rate); // Around 50 refreshes / sec
 
+  // Init RTC
+  if (!rtc.begin()) {
+    errState = 10;
+  }
+
+  if (!rtc.isrunning()) {
+    errState = 12;
+  }
+  
   // Show init sequence
   tBuf = "Hello there";
-  scnOp = 1;
+  scnOp = -1;
   delay(3350);
   scnOp = 0;
 
@@ -71,17 +85,13 @@ char getDigit(uint16_t value, byte digit) {
   return static_cast<uint16_t>(value / pow(10, digit)) % 10;
 }
 
-void writeDigit(char pins, bool dp) {
-  digitalWrite(disp_seg_pins[7], dp);
-  if (dispSleep) {
-    for (int i = 0; i < 7; i++) digitalWrite(disp_seg_pins[i], 0);
-    return;
-  }
-  for (int i = 0; i < 7; i++) digitalWrite(disp_seg_pins[i], (pins >> (6 - i)) & 1);
+void writeDigit(uint8_t pins) {
+  for (int i = 0; i < 8; i++) digitalWrite(disp_seg_pins[i], (pins >> (7 - i)) & 1);
 }
 
 void updateScnBuffWithData(uint16_t value) {
   for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(getDigit(value, DISP_DIGITS - 1 - i) + '0');
+  sBuf[0] = sBuf[0] | 0b00000001; // Add decimal point dot
 }
 
 uint16_t txtScrollLoc = 0;
@@ -98,20 +108,49 @@ void updateScnBuffWithText(String txt) {
   }
 }
 
+void dispSleep() {
+  sBuf[0] = 0x00;
+  sBuf[1] = 0x00;
+  sBuf[2] = 0x00;
+  sBuf[3] = 0x00;
+}
+
+void updateScnBuffWithTime() {
+  // Update the disp time
+  uint16_t timeBuff = 0;
+  DateTime now = rtc.now();
+  timeBuff += now.hour() * 100;
+  timeBuff += now.minute();
+
+  // Then do the same thing as updateScnBuffWithDate to populate display buff
+  for (int i = 0; i < DISP_DIGITS; i++) 
+    sBuf[i] = decode_7seg(getDigit(timeBuff, DISP_DIGITS - 1 - i) + '0');
+
+  // Set the decimal place if the second is even
+  if (now.second() % 2 == 0) sBuf[1] = sBuf[1] | 0b00000001;
+}
+
 void screenUpdate() {
   for (int i = 0; i < DISP_DIGITS; i++) digitalWrite(disp_dig_pins[i], digit != i);
 
-  writeDigit(sBuf[digit], (digit == 0 && scnOp == 0 && !dispSleep) || (digit == DISP_DIGITS - 1 && !actLEDSt));
-  
+  writeDigit(sBuf[digit]);
+
+  if (digit == DISP_DIGITS - 1 && !actLEDSt) sBuf[digit] = sBuf[digit] | 0b00000001;
+  else if (digit == DISP_DIGITS - 1 && actLEDSt) sBuf[digit] = sBuf[digit] & 0b11111110;
+   
   digit++;
   uCyc ++;
 
   if (uCyc == REF_RATE / 5) {
     // Update digits
     switch (scnOp) {
-      case 0: updateScnBuffWithData(uVal); actLEDSt = !actLEDSt; break;
-      case 1: updateScnBuffWithText(tBuf); break;
+      case -1: updateScnBuffWithText(tBuf); break;
+      case 0: updateScnBuffWithData(uVal); break;
+      case 1: updateScnBuffWithTime(); break;
+      case 2: dispSleep(); break;
     }
+
+    actLEDSt = !actLEDSt;
     
     // Toggle heartbeat LED
     digitalWrite(72, actLEDSt);

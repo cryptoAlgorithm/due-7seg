@@ -4,14 +4,19 @@
 #define REF_RATE 500
 #define REF_INT  1000000 / REF_RATE
 #define DISP_DIGITS 4
+#define MAX_MODE 2
 
 // ADC/DMA settings
 #define BUF_PRI_LEN 8192
 
 // IO pins
-#define OK_BTN_PIN 44
+#define OK_BTN_PIN 48
+
+// Stepper config
+#define STEP_PER_REV 64
 
 #include "DueTimer.h"
+#include "RTClib.h"
 #include <cmath>
 
 // Arduino Due ADC -> DMA -> USB 1MSPS
@@ -41,7 +46,7 @@ void setup() {
   hbInit();
   initDisp(REF_INT);
 
-  attachInterrupt(digitalPinToInterrupt(OK_BTN_PIN), toggleDispSleep, RISING); // Set button interrupt
+  attachInterrupt(digitalPinToInterrupt(OK_BTN_PIN), changeMode, RISING); // Set button interrupt
   
   // Init and wait for SerialUSB to connect
   SerialUSB.begin(0);
