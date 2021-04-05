@@ -72,7 +72,6 @@ void setMode(int8_t nMode, bool persist = true) {
       default: tBuf ="sleep   "; break;
     }
     nScnOp = scnOp;
-    SerialUSB.println(scnOp);
     setMode(-1, false);
   }
 }
