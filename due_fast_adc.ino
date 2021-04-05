@@ -4,8 +4,9 @@
 #define REF_RATE 500
 #define REF_INT  1000000 / REF_RATE
 #define DISP_DIGITS 4
-#define MAX_MODE 3
+#define MAX_MODE 4
 #define DEBOUNCE_T 250
+#define BONG_MAX_T 10
 
 // ADC/DMA settings
 #define BUF_PRI_LEN 8192
@@ -38,7 +39,7 @@ void ADC_Handler() {     // Move DMA pointers to next buffer
     bufn = (bufn + 1) & 3;
     ADC -> ADC_RNPR = (uint32_t)buf[bufn];
     ADC -> ADC_RNCR = BUF_PRI_LEN;
-  } 
+  }
 }
 
 void setup() {

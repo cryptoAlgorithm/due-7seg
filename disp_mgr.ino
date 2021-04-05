@@ -59,7 +59,7 @@ void updateDataBuff(uint16_t value) {
 }
 
 void setMode(int8_t nMode, bool persist = true) {  
-  if (scnOp >= MAX_MODE || scnOp < -1) scnOp = 0;
+  if (scnOp > MAX_MODE || scnOp < -1) scnOp = 0;
   else scnOp = nMode;
   
   if (persist && scnOp >= 0) {
@@ -68,6 +68,7 @@ void setMode(int8_t nMode, bool persist = true) {
       case 0: tBuf = "Adc   "; break;
       case 1: tBuf = "rtc   "; break;
       case 2: tBuf = "date   "; break;
+      case 3: tBuf = "funni   "; break;
       default: tBuf ="sleep   "; break;
     }
     nScnOp = scnOp;
@@ -82,7 +83,7 @@ void changeMode() {
   // Do whatever you want to do here  
   if (scnOp == -1) return; // If the display is displaying text, ignore the change
   
-  if (scnOp + 1 >= MAX_MODE) setMode(0);
+  if (scnOp + 1 > MAX_MODE) setMode(0);
   else setMode(scnOp + 1);
   
   ignoreBtn = millis();
@@ -126,58 +127,6 @@ void writeDigit(uint8_t pins) {
   for (int i = 0; i < 8; i++) digitalWrite(disp_seg_pins[i], (pins >> (7 - i)) & 1);
 }
 
-/* ###### Screen buffer update functions ###### */
-void updateScnBuffWithData(uint16_t value) {
-  updateFromDecimal(value);
-  addDp(0);
-}
-
-uint16_t txtScrollLoc = 0;
-uint8_t  txtScrollInt = 0;
-bool     initShowMode = true;
-void updateScnBuffWithText(String txt) {
-  String buff = txt.substring(txtScrollLoc, txtScrollLoc + 4);
-  if (txtScrollLoc + 3 >= txt.length()) {
-    txtScrollLoc = 0;
-    setMode(nScnOp, initShowMode);
-    initShowMode = false;
-  }
-  
-  for (int i = 0; i < DISP_DIGITS; i++) sBuf[i] = decode_7seg(buff[i]);
-  
-  txtScrollInt++;
-  if (txtScrollInt == 4) {
-    txtScrollInt = 0;
-    txtScrollLoc++;
-  }
-}
-
-void updateScnBuffWithTime() {
-  // Update the disp time
-  DateTime now = rtc.now();
-
-  // Then do the same thing as updateScnBuffWithDate to populate display buff
-  updateFromDecimal((now.hour() * 100) + now.minute());
-
-  // Set the decimal place if the second is even
-  if (now.second() % 2 == 0) addDp(1);
-}
-
-void updateScnBuffWithDate() {
-  DateTime now = rtc.now();
-  updateFromDecimal((now.day() * 100) + now.month());
-
-  addDp(1);
-}
-
-void dispSleep() {
-  sBuf[0] = 0x00;
-  sBuf[1] = 0x00;
-  sBuf[2] = 0x00;
-  sBuf[3] = 0x00;
-}
-/* ############ */
-
 void screenUpdate() {
   for (int i = 0; i < DISP_DIGITS; i++) digitalWrite(disp_dig_pins[i], digit != i);
 
@@ -197,6 +146,7 @@ void screenUpdate() {
       case 0: updateScnBuffWithData(uVal); break;
       case 1: updateScnBuffWithTime(); break;
       case 2: updateScnBuffWithDate(); break;
+      case 3: updateScnBuffWithCount(); break;
       default: dispSleep();
     }
 
